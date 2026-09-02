@@ -2,9 +2,9 @@ name: Morning Brief
 
 on:
   schedule:
-    # 01:00 UTC = 06:30 IST. GitHub's cron can run late by 5-20 minutes
-    # under load, which is fine for a daily digest.
-    - cron: "0 1 * * *"
+    # 00:30 UTC = 06:00 IST. GitHub's cron drifts under load, often by
+    # 10-30 minutes, which is fine for something read over breakfast.
+    - cron: "30 0 * * *"
   workflow_dispatch:        # lets you trigger a run by hand from the Actions tab
   push:
     branches: [main]        # tests only; the send step is skipped on push
@@ -13,8 +13,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -26,8 +26,8 @@ jobs:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -38,4 +38,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
           DATABASE_URL:     ${{ secrets.DATABASE_URL }}
+          # Non-secret settings. Each falls back to the default in
+          # config.py if the repository variable isn't set.
+          GEMINI_MODEL:     ${{ vars.GEMINI_MODEL }}
+          REQUEST_DELAY:    ${{ vars.REQUEST_DELAY }}
+          PRE_SUMMARY_CAP:  ${{ vars.PRE_SUMMARY_CAP }}
+          MAX_ITEMS:        ${{ vars.MAX_ITEMS }}
+          TOP_N:            ${{ vars.TOP_N }}
         run: python -m src.digest
