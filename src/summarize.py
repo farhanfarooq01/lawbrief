@@ -14,6 +14,8 @@ import time
 
 import requests
 
+from datetime import date
+
 from . import config
 from .sources import Item
 
@@ -36,9 +38,12 @@ RESPONSE_SCHEMA = {
         "why_matters": {"type": "STRING"},
         "provision": {"type": "STRING", "nullable": True},
         "category": {"type": "STRING",
-                     "enum": ["judgment", "legislation", "policy", "opportunity"]},
+                     "enum": ["judgment", "legislation", "policy", "opportunity", "firm"]},
         "importance": {"type": "INTEGER"},
         "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "deadline": {"type": "STRING", "nullable": True},
+        "matter": {"type": "STRING", "nullable": True},
+        "development": {"type": "STRING", "nullable": True},
     },
     "required": ["what_happened", "why_matters", "category", "importance"],
 }
@@ -59,13 +64,36 @@ Return a single JSON object, no markdown fences, with these keys:
                  Transfer of Property Act, 1882" or "Article 21"). If no
                  provision appears in the source text, use null. Never infer
                  one. Never recall one from memory.
-  category       One of: judgment, legislation, policy, opportunity.
+  category       One of: judgment, legislation, policy, opportunity, firm.
+                 - judgment: court rulings, orders, bail decisions, hearings.
+                 - legislation: Acts, Bills, amendments, statutory rules.
+                 - policy: RBI/SEBI/government notifications, circulars, rules.
+                 - opportunity: ONLY student/academic opportunities (internships,
+                   competitions, calls for papers, fellowships, student courses).
+                 - firm: law firm news, deal advisories (e.g. advising companies/funds),
+                   lateral partner hires, promotions, firm appointments, mergers.
+                   Never put deal advisories or partner hires into opportunity.
   importance     Integer 1-5. 5 = a Constitution Bench ruling, a new Act, or a
                  change that alters practice nationally. 3 = a significant but
                  narrow ruling or a Bill introduced. 1 = routine, procedural,
-                 or a single listing.
+                 or a single listing / lateral move.
   tags           Up to three lowercase subject tags, e.g. ["criminal",
                  "evidence"].
+  deadline       For internships, webinars, competitions and calls for
+                 papers only: the last date to apply or register, as
+                 YYYY-MM-DD. Only if a date appears in the source text.
+                 Otherwise null. Never guess a year.
+  matter         The underlying dispute, statute or proceeding this item is
+                 a development in, named the same way every time it comes
+                 up. Prefer the case name if the source gives one, else the
+                 statute plus the issue. Examples: "Places of Worship Act
+                 1991 constitutional validity", "Vodafone retrospective tax
+                 arbitration". Use null for one-off news, opportunities, and
+                 anything not part of a continuing story.
+  development    Only when matter is set: what happened at this step, in at
+                 most eight words, no full stop. Examples: "Notice issued to
+                 the Centre", "Arguments concluded, judgment reserved",
+                 "Counter-affidavit filed". Otherwise null.
 
 Be dry and specific. No hedging, no throat-clearing, no adjectives that carry
 no information."""
@@ -104,7 +132,7 @@ def _call_gemini(prompt: str, api_key: str, model: str) -> str:
                 ENDPOINT.format(model=model, key=api_key),
                 headers={"Content-Type": "application/json"},
                 json=payload,
-                timeout=45,
+                timeout=(10, 45),
             )
             if resp.status_code == 429:
                 wait = float(resp.headers.get("Retry-After", 0)) or \
@@ -197,7 +225,31 @@ def summarize(item: Item, api_key: str | None = None, model: str | None = None) 
     except (TypeError, ValueError):
         item.importance = 2
 
+    item.deadline = _parse_deadline(parsed.get("deadline"))
+    item.matter = (parsed.get("matter") or "").strip() or None
+    item.development = (parsed.get("development") or "").strip()[:70] or None
+    if item.matter and not item.development:
+        # A matter without a development cannot join a thread usefully.
+        item.development = item.what_happened[:70]
     return item
+
+
+def _parse_deadline(raw) -> date | None:
+    """Accept YYYY-MM-DD, and only if it is today or later.
+
+    A past deadline is either a parsing mistake or an expired listing.
+    Either way it should not appear in tomorrow's digest.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        parsed = date.fromisoformat(raw.strip()[:10])
+    except ValueError:
+        return None
+    today = date.today()
+    if parsed < today or (parsed - today).days > 400:
+        return None
+    return parsed
 
 
 def summarize_all(items: list[Item]) -> list[Item]:
@@ -208,9 +260,61 @@ def summarize_all(items: list[Item]) -> list[Item]:
           f"about {total * delay / 60:.0f} min)...")
 
     out: list[Item] = []
-    for n, item in enumerate(items, 1):
-        print(f"  [{n}/{total}] {item.source_key}: {item.title[:64]}", flush=True)
-        out.append(summarize(item))
-        if n < total:
-            time.sleep(delay)
+    try:
+        for n, item in enumerate(items, 1):
+            print(f"  [{n}/{total}] {item.source_key}: {item.title[:64]}", flush=True)
+            out.append(summarize(item))
+            if n < total:
+                time.sleep(delay)
+    except KeyboardInterrupt:
+        print(f"\n  [interrupted] Keeping {len(out)} items summarised so far.",
+              flush=True)
     return out
+
+
+VERDICT_SYSTEM = """You write a single sentence describing the character of a
+day in Indian law, for a law student's morning digest.
+
+You are given the day's headlines. Say whether it was a substantial day or a
+quiet one, and name the one thing that stood out if anything did.
+
+Rules. One sentence, under 20 words. Plain and dry. No adjectives that carry
+no information. Never invent an item that is not in the list. If the day is
+routine, say so plainly rather than inflating it.
+
+Good: "Quiet day. One Constitution Bench matter listed, the rest procedural."
+Good: "Busy day, with two significant judgments on criminal procedure."
+Bad:  "An exciting and eventful day in the world of Indian law!"
+
+Return only the sentence, no quotes, no JSON."""
+
+
+def verdict(items: list[Item], api_key: str | None = None,
+            model: str | None = None) -> str:
+    """One line on what kind of day it was. Empty string on any failure."""
+    if not items:
+        return ""
+    api_key = api_key or config.GEMINI_API_KEY
+    model = model or config.GEMINI_MODEL
+
+    lines = [f"- [{i.category}, importance {i.importance}] {i.what_happened}"
+             for i in items[:12]]
+    prompt = "Today's items:\n" + "\n".join(lines)
+
+    payload = {
+        "systemInstruction": {"parts": [{"text": VERDICT_SYSTEM}]},
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 200},
+    }
+    try:
+        resp = requests.post(
+            ENDPOINT.format(model=model, key=api_key),
+            headers={"Content-Type": "application/json"},
+            json=payload, timeout=45,
+        )
+        resp.raise_for_status()
+        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return " ".join(text.strip().strip('"').split())[:200]
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [warn] verdict failed: {type(exc).__name__}", flush=True)
+        return ""

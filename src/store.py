@@ -31,6 +31,21 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS idx_items_revisit ON items (revisit_on)
     WHERE revisit_on IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS stories (
+    id         SERIAL PRIMARY KEY,
+    label      TEXT NOT NULL,
+    tokens     TEXT[] NOT NULL,
+    first_seen DATE,
+    last_seen  DATE
+);
+CREATE INDEX IF NOT EXISTS idx_stories_last_seen ON stories (last_seen DESC);
+
+-- Added after the first release, so guarded rather than in CREATE TABLE.
+ALTER TABLE items ADD COLUMN IF NOT EXISTS story_id INT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS development TEXT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS matter TEXT;
+CREATE INDEX IF NOT EXISTS idx_items_story ON items (story_id, sent_on);
+
 CREATE TABLE IF NOT EXISTS cases (
     id        SERIAL PRIMARY KEY,
     name      TEXT NOT NULL,
@@ -95,13 +110,15 @@ def save_sent(conn, items: list[Item], today: date | None = None) -> None:
                 """
                 INSERT INTO items (id, source_key, source_name, category, title, url,
                                    published, what_happened, why_matters, provision,
-                                   importance, tags, sent_on, revisit_on, revisit_stage)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0)
+                                   importance, tags, sent_on, revisit_on, revisit_stage,
+                                   story_id, development, matter)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s)
                 ON CONFLICT (id) DO NOTHING
                 """,
                 (i.id, i.source_key, i.source_name, i.category, i.title, i.url,
                  i.published, i.what_happened, i.why_matters, i.provision,
-                 i.importance, i.tags, today, revisit),
+                 i.importance, i.tags, today, revisit,
+                 i.story_id, i.development, i.matter),
             )
     conn.commit()
 
@@ -148,3 +165,93 @@ def case_of_the_day(conn, today: date | None = None) -> dict | None:
                         (today, row["id"]))
             conn.commit()
         return row
+
+
+def recent_notable(conn, today: date | None = None,
+                   days: int | None = None) -> list[dict]:
+    """Earlier items worth connecting today's news back to.
+
+    Only items that mattered (importance 3+) and that are at least three
+    days old, so "connects to" points at something genuinely earlier rather
+    than at this morning's neighbour.
+    """
+    today = today or date.today()
+    days = days or config.RELATED_WINDOW_DAYS
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, what_happened, title, provision, tags, sent_on
+               FROM items
+               WHERE importance >= 3
+                 AND sent_on IS NOT NULL
+                 AND sent_on <= %s - INTERVAL '3 days'
+                 AND sent_on >= %s - make_interval(days => %s)
+               ORDER BY sent_on DESC
+               LIMIT 400""",
+            (today, today, days),
+        )
+        return cur.fetchall()
+
+
+# --------------------------------------------------------------------------
+# Stories
+# --------------------------------------------------------------------------
+
+def load_stories(conn, today: date | None = None,
+                 days: int = 400) -> list[dict]:
+    """Stories seen recently enough to still be running."""
+    today = today or date.today()
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, label, tokens, first_seen, last_seen
+               FROM stories
+               WHERE last_seen >= %s - make_interval(days => %s)
+               ORDER BY last_seen DESC
+               LIMIT 500""",
+            (today, days),
+        )
+        return cur.fetchall()
+
+
+def create_story(conn, label: str, tokens: list[str],
+                 today: date | None = None) -> int:
+    today = today or date.today()
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO stories (label, tokens, first_seen, last_seen)
+               VALUES (%s,%s,%s,%s) RETURNING id""",
+            (label[:200], tokens, today, today),
+        )
+        new_id = cur.fetchone()["id"]
+    conn.commit()
+    return new_id
+
+
+def touch_story(conn, story_id: int, today: date | None = None) -> None:
+    today = today or date.today()
+    with conn.cursor() as cur:
+        cur.execute("UPDATE stories SET last_seen = %s WHERE id = %s",
+                    (today, story_id))
+    conn.commit()
+
+
+def story_events(conn, story_ids: list[int]) -> dict[int, list[dict]]:
+    """Every recorded step for the given stories, grouped by story."""
+    if not story_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT story_id, development, what_happened, sent_on
+               FROM items
+               WHERE story_id = ANY(%s) AND sent_on IS NOT NULL
+               ORDER BY sent_on ASC""",
+            (story_ids,),
+        )
+        rows = cur.fetchall()
+
+    grouped: dict[int, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row["story_id"], []).append({
+            "on": row["sent_on"],
+            "development": row["development"] or row["what_happened"],
+        })
+    return grouped

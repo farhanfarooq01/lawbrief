@@ -57,6 +57,14 @@ RETRY_BASE_WAIT = _num("RETRY_BASE_WAIT", "8", float)
 # Revision intervals, in days.
 REVISIT_DAYS = [7, 30, 90]
 
+# Shown in the header. Blank it to drop the greeting line entirely.
+GREETING_NAME = (os.environ.get("GREETING_NAME") or "Roshansa").strip()
+
+# How far back "connects to" looks for a related earlier item, and how
+# many shared tags count as a connection.
+RELATED_WINDOW_DAYS = _num("RELATED_WINDOW_DAYS", "120")
+RELATED_MIN_TAGS = _num("RELATED_MIN_TAGS", "2")
+
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
 
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import feedparser
 import requests
@@ -49,7 +49,7 @@ SOURCES: list[Source] = [
            "policy", "open", weight=1),
     Source("rbi", "Reserve Bank of India", "https://www.rbi.org.in/pressreleases_rss.xml",
            "policy", "open", weight=1),
-    Source("livelaw", "LiveLaw", "https://www.livelaw.in/top-stories",
+    Source("livelaw", "LiveLaw", "https://www.livelaw.in/feed",
            "judgment", "link", weight=1),
     Source("barandbench", "Bar & Bench", "https://www.barandbench.com/feed",
            "judgment", "link", weight=0),
@@ -78,6 +78,13 @@ class Item:
     provision: str | None = None
     importance: int = 0
     tags: list[str] = field(default_factory=list)
+    deadline: date | None = None        # opportunities only
+    related: str | None = None          # "connects to" an earlier item
+    related_on: date | None = None
+    matter: str | None = None           # canonical name of the underlying matter
+    development: str | None = None      # this item's step, in a few words
+    story_id: int | None = None
+    thread: list = field(default_factory=list)   # [{on, development}]
 
 
 def _canonical(url: str) -> str:

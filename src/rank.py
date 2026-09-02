@@ -8,6 +8,7 @@ below stops guessing.
 """
 from __future__ import annotations
 
+from . import config
 from .sources import Item
 
 CATEGORY_BONUS = {
@@ -15,6 +16,7 @@ CATEGORY_BONUS = {
     "legislation": 1.0,
     "policy": 0.4,
     "opportunity": 0.0,
+    "firm": -0.2,
 }
 
 # Words that reliably signal a big item. Crude, but better than pure recency.
@@ -43,7 +45,39 @@ def rank(items: list[Item], max_items: int, top_n: int) -> tuple[list[Item], lis
     ordered = sorted(items, key=score, reverse=True)[:max_items]
     top = ordered[:top_n]
 
-    # Opportunities never belong in Top Things, however loud the headline.
-    top = [i for i in top if i.category != "opportunity"]
+    # Opportunities and firm news never belong in Top Things, however loud the headline.
+    top = [i for i in top if i.category not in ("opportunity", "firm")]
     rest = [i for i in ordered if i not in top]
     return top, rest
+
+
+def attach_related(items, history: list[dict]) -> None:
+    """Link each item to one earlier item on the same subject, if any.
+
+    Matching is on a shared provision first, since that is the strongest
+    signal two items concern the same point of law, then on overlapping
+    subject tags. Pure logic, so it stays testable without a database.
+    """
+    if not history:
+        return
+
+    for item in items:
+        best: dict | None = None
+
+        if item.provision:
+            for row in history:
+                if row.get("provision") and row["provision"] == item.provision:
+                    best = row
+                    break
+
+        if best is None and item.tags:
+            mine = {t.lower() for t in item.tags}
+            for row in history:
+                theirs = {t.lower() for t in (row.get("tags") or [])}
+                if len(mine & theirs) >= config.RELATED_MIN_TAGS:
+                    best = row
+                    break
+
+        if best is not None:
+            item.related = (best.get("what_happened") or best.get("title") or "")
+            item.related_on = best.get("sent_on")
