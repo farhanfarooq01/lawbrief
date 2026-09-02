@@ -4,7 +4,7 @@ on:
   schedule:
     # 00:30 UTC = 06:00 IST. GitHub's cron drifts under load, often by
     # 10-30 minutes, which is fine for something read over breakfast.
-        - cron: "40 16 * * *"
+            - cron: "0 17 * * *"
   workflow_dispatch:        # lets you trigger a run by hand from the Actions tab
   push:
     branches: [main]        # tests only; the send step is skipped on push
