@@ -38,7 +38,8 @@ RESPONSE_SCHEMA = {
         "why_matters": {"type": "STRING"},
         "provision": {"type": "STRING", "nullable": True},
         "category": {"type": "STRING",
-                     "enum": ["judgment", "legislation", "policy", "opportunity", "firm"]},
+                     "enum": ["judgment", "legislation", "policy",
+                              "profession", "opportunity"]},
         "importance": {"type": "INTEGER"},
         "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
         "deadline": {"type": "STRING", "nullable": True},
@@ -64,19 +65,26 @@ Return a single JSON object, no markdown fences, with these keys:
                  Transfer of Property Act, 1882" or "Article 21"). If no
                  provision appears in the source text, use null. Never infer
                  one. Never recall one from memory.
-  category       One of: judgment, legislation, policy, opportunity, firm.
-                 - judgment: court rulings, orders, bail decisions, hearings.
-                 - legislation: Acts, Bills, amendments, statutory rules.
-                 - policy: RBI/SEBI/government notifications, circulars, rules.
-                 - opportunity: ONLY student/academic opportunities (internships,
-                   competitions, calls for papers, fellowships, student courses).
-                 - firm: law firm news, deal advisories (e.g. advising companies/funds),
-                   lateral partner hires, promotions, firm appointments, mergers.
-                   Never put deal advisories or partner hires into opportunity.
+  category       Exactly one of:
+                 judgment    - a court decided, held, stayed, or reserved.
+                 legislation - a Bill, Act, amendment, ordinance or rule.
+                 policy      - a regulator or ministry issued or announced
+                               something.
+                 profession  - law firm news: a deal advised on, a lateral
+                               hire, a promotion, a firm merger, an
+                               appointment to the bench or bar.
+                 opportunity - something a student can APPLY TO or ATTEND:
+                               an internship, webinar, moot, competition,
+                               call for papers, scholarship, course.
+
+                 A law firm advising on a transaction is "profession", never
+                 "opportunity". A partner joining a firm is "profession",
+                 never "opportunity". If nobody can apply to it, it is not
+                 an opportunity.
   importance     Integer 1-5. 5 = a Constitution Bench ruling, a new Act, or a
                  change that alters practice nationally. 3 = a significant but
                  narrow ruling or a Bill introduced. 1 = routine, procedural,
-                 or a single listing / lateral move.
+                 or a single listing.
   tags           Up to three lowercase subject tags, e.g. ["criminal",
                  "evidence"].
   deadline       For internships, webinars, competitions and calls for
@@ -132,7 +140,7 @@ def _call_gemini(prompt: str, api_key: str, model: str) -> str:
                 ENDPOINT.format(model=model, key=api_key),
                 headers={"Content-Type": "application/json"},
                 json=payload,
-                timeout=(10, 45),
+                timeout=45,
             )
             if resp.status_code == 429:
                 wait = float(resp.headers.get("Retry-After", 0)) or \
@@ -260,15 +268,11 @@ def summarize_all(items: list[Item]) -> list[Item]:
           f"about {total * delay / 60:.0f} min)...")
 
     out: list[Item] = []
-    try:
-        for n, item in enumerate(items, 1):
-            print(f"  [{n}/{total}] {item.source_key}: {item.title[:64]}", flush=True)
-            out.append(summarize(item))
-            if n < total:
-                time.sleep(delay)
-    except KeyboardInterrupt:
-        print(f"\n  [interrupted] Keeping {len(out)} items summarised so far.",
-              flush=True)
+    for n, item in enumerate(items, 1):
+        print(f"  [{n}/{total}] {item.source_key}: {item.title[:64]}", flush=True)
+        out.append(summarize(item))
+        if n < total:
+            time.sleep(delay)
     return out
 
 

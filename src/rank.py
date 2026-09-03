@@ -15,8 +15,8 @@ CATEGORY_BONUS = {
     "judgment": 1.0,
     "legislation": 1.0,
     "policy": 0.4,
+    "profession": -0.5,     # firm moves rarely belong near the top
     "opportunity": 0.0,
-    "firm": -0.2,
 }
 
 # Words that reliably signal a big item. Crude, but better than pure recency.
@@ -45,8 +45,9 @@ def rank(items: list[Item], max_items: int, top_n: int) -> tuple[list[Item], lis
     ordered = sorted(items, key=score, reverse=True)[:max_items]
     top = ordered[:top_n]
 
-    # Opportunities and firm news never belong in Top Things, however loud the headline.
-    top = [i for i in top if i.category not in ("opportunity", "firm")]
+    # Neither opportunities nor firm news belong at the top, however loud
+    # the headline. Top Things is for law that changed.
+    top = [i for i in top if i.category not in ("opportunity", "profession")]
     rest = [i for i in ordered if i not in top]
     return top, rest
 

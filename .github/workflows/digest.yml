@@ -2,9 +2,11 @@ name: Morning Brief
 
 on:
   schedule:
-    # 00:30 UTC = 06:00 IST. GitHub's cron drifts under load, often by
-    # 10-30 minutes, which is fine for something read over breakfast.
-             - cron: "30 0 * * *"
+    # Fallback only. A Cloudflare Worker dispatches this at 06:00 IST;
+    # GitHub's own scheduler queues behind other work on free public
+    # repos and has run over four hours late. This later slot exists so
+    # a digest still arrives on days the Worker fails.
+    - cron: "0 3 * * *"
   workflow_dispatch:        # lets you trigger a run by hand from the Actions tab
   push:
     branches: [main]        # tests only; the send step is skipped on push

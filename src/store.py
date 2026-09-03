@@ -64,6 +64,12 @@ def connect(attempts: int = 5):
     connection after that is routinely refused or dropped mid-handshake while
     the compute spins back up, which takes a few seconds. This is normal
     rather than an error, so retry quietly before giving up.
+
+    Neon also kills connections left idle inside a transaction, which is why
+    every read here commits before returning, and why digest.py closes the
+    connection entirely across the summarising phase. A plain SELECT opens a
+    transaction that stays open until committed, and five minutes of LLM
+    calls is long enough for the server to drop it.
     """
     last: Exception | None = None
     for n in range(attempts):
@@ -94,6 +100,7 @@ def filter_new(conn, items: list[Item]) -> list[Item]:
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM items WHERE id = ANY(%s)", (ids,))
         known = {r["id"] for r in cur.fetchall()}
+    conn.commit()   # close the read transaction; see connect() docstring
     fresh = [i for i in items if i.id not in known]
     print(f"New after dedup: {len(fresh)} of {len(items)}")
     return fresh
@@ -132,7 +139,9 @@ def due_for_revision(conn, today: date | None = None, limit: int = 2) -> list[di
                ORDER BY importance DESC, revisit_on ASC LIMIT %s""",
             (today, limit),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    conn.commit()
+    return rows
 
 
 def advance_revision(conn, rows: list[dict], today: date | None = None) -> None:
@@ -189,7 +198,9 @@ def recent_notable(conn, today: date | None = None,
                LIMIT 400""",
             (today, today, days),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    conn.commit()
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -209,7 +220,9 @@ def load_stories(conn, today: date | None = None,
                LIMIT 500""",
             (today, days),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    conn.commit()
+    return rows
 
 
 def create_story(conn, label: str, tokens: list[str],
@@ -247,6 +260,7 @@ def story_events(conn, story_ids: list[int]) -> dict[int, list[dict]]:
             (story_ids,),
         )
         rows = cur.fetchall()
+    conn.commit()
 
     grouped: dict[int, list[dict]] = {}
     for row in rows:

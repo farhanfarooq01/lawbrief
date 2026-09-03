@@ -67,7 +67,12 @@ def main() -> int:
     fresh = store.filter_new(conn, items)
     if not fresh:
         print("Nothing new today. Exiting without sending.")
+        conn.close()
         return 0
+
+    # Summarising takes minutes. Hold no connection across it: Neon drops
+    # anything left idle, and reconnecting afterwards costs a second.
+    conn.close()
 
     # Newest first, then cap. Summarising is the only step with a quota.
     fresh.sort(key=lambda i: (i.published is not None, i.published), reverse=True)
@@ -78,6 +83,8 @@ def main() -> int:
     fresh = summarize.summarize_all(fresh)
     top, rest = rank.rank(fresh, config.MAX_ITEMS, config.TOP_N)
 
+    conn = store.connect()
+
     # Chain items into ongoing stories, then fall back to a looser
     # "connects to" for anything that isn't part of one.
     attach_threads(conn, top + rest, today)
@@ -87,6 +94,7 @@ def main() -> int:
 
     revision = store.due_for_revision(conn, today)
     case = store.case_of_the_day(conn, today)
+    conn.close()
 
     print("Writing the day's verdict...")
     day_verdict = summarize.verdict(top + rest)
@@ -97,10 +105,10 @@ def main() -> int:
                   dry_run=config.DRY_RUN)
 
     if not config.DRY_RUN:
+        conn = store.connect()
         store.save_sent(conn, top + rest, today)
         store.advance_revision(conn, revision, today)
-
-    conn.close()
+        conn.close()
     print("Done.")
     return 0
 

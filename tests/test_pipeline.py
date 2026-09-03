@@ -92,16 +92,6 @@ def test_opportunities_never_reach_top():
     assert any(i.category == "opportunity" for i in rest)
 
 
-def test_firm_news_never_reach_top():
-    items = [
-        make(id="a", category="firm", importance=5),
-        make(id="b", category="judgment", importance=4),
-    ]
-    top, rest = rank.rank(items, max_items=10, top_n=1)
-    assert all(i.category != "firm" for i in top)
-    assert any(i.category == "firm" for i in rest)
-
-
 def test_max_items_is_respected():
     items = [make(id=str(n)) for n in range(50)]
     top, rest = rank.rank(items, max_items=12, top_n=3)
@@ -125,8 +115,8 @@ def test_every_item_carries_its_source_link():
 
 
 def test_missing_provision_prints_nothing_rather_than_guessing():
-    assert "Turns on" not in telegram.render_item(make(provision=None))
-    assert "Turns on" in telegram.render_item(make(provision="Article 21"))
+    assert "§" not in telegram.render_item(make(provision=None))
+    assert "§ Article 21" in telegram.render_item(make(provision="Article 21"))
 
 
 def test_html_is_escaped():
@@ -324,3 +314,32 @@ def test_thread_suppresses_the_weaker_connects_to_line():
                 thread=[{"on": date(2026, 8, 1), "development": "a"},
                         {"on": today, "development": "b"}])
     assert "Connects to" not in telegram.render_item(item, today=today)
+
+
+# --- layout ------------------------------------------------------------------
+
+def test_digest_has_an_end_marker():
+    """Without one, consecutive days run together in the channel."""
+    msgs = telegram.build([make()], [], [], None, date(2026, 9, 3))
+    assert "End of brief" in msgs[-1]
+
+
+def test_no_leading_space_indentation():
+    """Telegram drops the indent on wrapped lines, so structure must not
+    depend on it."""
+    out = telegram.render_item(make(why_matters="Long explanation here.",
+                                    provision="Article 21"))
+    for line in out.split("\n"):
+        assert not line.startswith(" "), line
+
+
+def test_firm_news_stays_out_of_top_things():
+    items = [make(id="a", category="profession", importance=5),
+             make(id="b", category="judgment", importance=3)]
+    top, rest = rank.rank(items, 10, 2)
+    assert all(i.category != "profession" for i in top)
+
+
+def test_provision_and_source_share_one_line():
+    out = telegram.render_item(make(provision="Article 21")).split("\n")
+    assert any("§ Article 21" in ln and "PIB" in ln for ln in out)
