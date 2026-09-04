@@ -343,3 +343,59 @@ def test_firm_news_stays_out_of_top_things():
 def test_provision_and_source_share_one_line():
     out = telegram.render_item(make(provision="Article 21")).split("\n")
     assert any("§ Article 21" in ln and "PIB" in ln for ln in out)
+
+
+# --- message splitting -------------------------------------------------------
+
+def test_oversized_block_never_splits_inside_a_tag():
+    """A raw character slice cut through <b> and Telegram rejected the
+    whole message with 'Unclosed start tag'."""
+    items = [make(id=str(n), what_happened=f"Item {n}. " + "word " * 40,
+                  why_matters="Because " + "reason " * 30)
+             for n in range(60)]
+    top, rest = rank.rank(items, 60, 3)
+    for msg in telegram.build(top, rest, [], None, date(2026, 9, 4)):
+        assert msg.count("<b>") == msg.count("</b>"), msg[-200:]
+        assert msg.count("<i>") == msg.count("</i>")
+        assert msg.count("<a ") == msg.count("</a>")
+        assert len(msg) <= 4096
+
+
+def test_split_block_respects_line_boundaries():
+    block = "\n".join(f"<b>line {n}</b>" for n in range(400))
+    for piece in telegram._split_block(block, 500):
+        assert piece.count("<b>") == piece.count("</b>")
+
+
+def test_strip_tags_leaves_readable_text():
+    got = telegram.strip_tags('<b>Held</b> under <i>Article 21</i>')
+    assert got == "Held under Article 21"
+
+
+# --- source spread -----------------------------------------------------------
+
+def test_one_noisy_feed_cannot_fill_the_digest():
+    from datetime import datetime, timezone
+    def at(day):
+        return datetime(2026, 9, day, 12, tzinfo=timezone.utc)
+
+    noisy = [make(id=f"n{n}", source_key="lawctopus", published=at(4))
+             for n in range(40)]
+    quiet = [make(id="q1", source_key="livelaw", published=at(4)),
+             make(id="q2", source_key="rbi", published=at(4))]
+
+    chosen = rank.spread_by_source(noisy + quiet, cap=10, per_source=6)
+    keys = [i.source_key for i in chosen]
+    assert keys.count("lawctopus") <= 6
+    assert "livelaw" in keys      # the quiet feed still gets in
+    assert "rbi" in keys
+
+
+def test_spread_returns_everything_when_under_the_cap():
+    items = [make(id=str(n)) for n in range(5)]
+    assert len(rank.spread_by_source(items, cap=20)) == 5
+
+
+def test_spread_never_exceeds_the_cap():
+    items = [make(id=str(n), source_key=f"s{n % 4}") for n in range(50)]
+    assert len(rank.spread_by_source(items, cap=12, per_source=6)) == 12

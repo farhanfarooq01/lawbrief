@@ -74,11 +74,21 @@ def main() -> int:
     # anything left idle, and reconnecting afterwards costs a second.
     conn.close()
 
-    # Newest first, then cap. Summarising is the only step with a quota.
-    fresh.sort(key=lambda i: (i.published is not None, i.published), reverse=True)
+    # Pick which items to summarise, spread across sources so a high-volume
+    # feed cannot crowd out a quiet one. Summarising is the only step with
+    # a quota, so this choice decides what the digest can contain.
     if len(fresh) > config.PRE_SUMMARY_CAP:
-        print(f"Capping {len(fresh)} -> {config.PRE_SUMMARY_CAP} before summarising.")
-        fresh = fresh[:config.PRE_SUMMARY_CAP]
+        before = {}
+        for i in fresh:
+            before[i.source_key] = before.get(i.source_key, 0) + 1
+        fresh = rank.spread_by_source(fresh, config.PRE_SUMMARY_CAP,
+                                      config.PER_SOURCE_CAP)
+        after = {}
+        for i in fresh:
+            after[i.source_key] = after.get(i.source_key, 0) + 1
+        print(f"Selecting {len(fresh)} of {sum(before.values())}: "
+              + ", ".join(f"{k} {after.get(k, 0)}/{v}"
+                          for k, v in sorted(before.items())))
 
     fresh = summarize.summarize_all(fresh)
     top, rest = rank.rank(fresh, config.MAX_ITEMS, config.TOP_N)

@@ -16,6 +16,7 @@ chunks split on section boundaries.
 from __future__ import annotations
 
 import html
+import re
 import time
 from datetime import date
 
@@ -211,37 +212,96 @@ def build(top: list[Item], rest: list[Item],
     return _pack(blocks)
 
 
+def strip_tags(text: str) -> str:
+    return re.sub(r"<[^>]+>", "", text)
+
+
+def _split_block(block: str, limit: int) -> list[str]:
+    """Break one oversized section on line boundaries.
+
+    Never mid-line. Every tag we emit opens and closes within a single
+    line, so a line boundary is always a safe cut, whereas slicing at a
+    character count can land inside <b> and Telegram rejects the entire
+    message with "Unclosed start tag".
+    """
+    out: list[str] = []
+    buf = ""
+    for line in block.split("\n"):
+        candidate = f"{buf}\n{line}" if buf else line
+        if len(candidate) <= limit:
+            buf = candidate
+            continue
+        if buf:
+            out.append(buf)
+        # A single line over the limit should not happen, but if it does,
+        # drop its markup rather than emit something unparseable.
+        buf = line if len(line) <= limit else strip_tags(line)[:limit]
+    if buf:
+        out.append(buf)
+    return out
+
+
 def _pack(blocks: list[str]) -> list[str]:
-    """Greedily fill messages up to LIMIT without splitting a block."""
+    """Greedily fill messages up to LIMIT, splitting only between lines."""
     out: list[str] = []
     buf = ""
     for block in blocks:
         candidate = f"{buf}\n\n\n{block}" if buf else block
         if len(candidate) <= LIMIT:
             buf = candidate
+            continue
+        if buf:
+            out.append(buf)
+            buf = ""
+        if len(block) <= LIMIT:
+            buf = block
         else:
-            if buf:
-                out.append(buf)
-            buf = block if len(block) <= LIMIT else block[:LIMIT]
+            pieces = _split_block(block, LIMIT)
+            out.extend(pieces[:-1])
+            buf = pieces[-1]
     if buf:
         out.append(buf)
     return out
 
 
-def send(messages: list[str], token: str, chat_id: str, dry_run: bool = False) -> None:
-    for n, text in enumerate(messages, 1):
-        if dry_run:
+def _post(token: str, chat_id: str, text: str, html_mode: bool = True):
+    body = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if html_mode:
+        body["parse_mode"] = "HTML"
+    return requests.post(API.format(token=token), json=body, timeout=30)
+
+
+def send(messages: list[str], token: str, chat_id: str,
+         dry_run: bool = False) -> int:
+    """Send each message, returning how many got through.
+
+    A malformed message is sent again as plain text rather than lost. One
+    bad message must never cost the whole digest, which is what happened
+    when this raised on the first failure.
+    """
+    if dry_run:
+        for n, text in enumerate(messages, 1):
             print(f"\n----- message {n}/{len(messages)} "
                   f"({len(text)} chars) -----\n{text}\n")
-            continue
-        resp = requests.post(
-            API.format(token=token),
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=30,
-        )
-        if not resp.ok:
-            print(f"  [error] telegram {resp.status_code}: {resp.text[:300]}")
-        resp.raise_for_status()
+        print("Dry run complete.")
+        return len(messages)
+
+    sent = 0
+    for n, text in enumerate(messages, 1):
+        resp = _post(token, chat_id, text)
+
+        if resp.status_code == 400 and "parse" in resp.text.lower():
+            print(f"  [warn] message {n} rejected as HTML; "
+                  f"resending as plain text", flush=True)
+            resp = _post(token, chat_id, strip_tags(text), html_mode=False)
+
+        if resp.ok:
+            sent += 1
+        else:
+            print(f"  [error] message {n} failed: "
+                  f"{resp.status_code} {resp.text[:200]}", flush=True)
+
         time.sleep(1.2)  # channel rate limit is ~20 messages/minute
-    print(f"Sent {len(messages)} message(s)." if not dry_run else "Dry run complete.")
+
+    print(f"Sent {sent} of {len(messages)} message(s).")
+    return sent

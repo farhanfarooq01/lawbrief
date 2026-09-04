@@ -48,6 +48,10 @@ LOOKBACK_HOURS = _num("LOOKBACK_HOURS", "26")
 # a busy news day doesn't burn the day's quota on items that rank low anyway.
 PRE_SUMMARY_CAP = _num("PRE_SUMMARY_CAP", "28")
 
+# Most items any single feed may contribute. Lawctopus publishes twenty
+# opportunities a day; without this it fills the digest on its own.
+PER_SOURCE_CAP = _num("PER_SOURCE_CAP", "6")
+
 # Seconds between LLM calls. The free tier allows roughly 10-15 requests per
 # minute; 5s keeps a comfortable margin. Lower it if you move to a paid key.
 REQUEST_DELAY = _num("REQUEST_DELAY", "12", float)

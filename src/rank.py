@@ -82,3 +82,46 @@ def attach_related(items, history: list[dict]) -> None:
         if best is not None:
             item.related = (best.get("what_happened") or best.get("title") or "")
             item.related_on = best.get("sent_on")
+
+
+def spread_by_source(items, cap: int, per_source: int | None = None):
+    """Choose which items to summarise, without letting one feed dominate.
+
+    Taking the newest N is wrong when feeds publish at wildly different
+    rates. Lawctopus posts twenty opportunities a day while the Supreme
+    Court gives one judgment, so newest-first hands the whole digest to
+    whoever is noisiest.
+
+    Instead, take items round-robin across sources: the newest from each
+    feed, then the second newest from each, and so on. A quiet feed still
+    gets its item in.
+    """
+    if len(items) <= cap:
+        return list(items)
+
+    buckets: dict[str, list] = {}
+    for item in items:
+        buckets.setdefault(item.source_key, []).append(item)
+
+    for group in buckets.values():
+        group.sort(key=lambda i: (i.published is not None, i.published),
+                   reverse=True)
+
+    chosen = []
+    round_n = 0
+    while len(chosen) < cap:
+        added = False
+        for key in sorted(buckets):
+            if per_source is not None and round_n >= per_source:
+                continue
+            group = buckets[key]
+            if round_n < len(group):
+                chosen.append(group[round_n])
+                added = True
+                if len(chosen) >= cap:
+                    break
+        if not added:
+            break
+        round_n += 1
+
+    return chosen
